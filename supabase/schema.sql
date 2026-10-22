@@ -105,3 +105,45 @@ create policy "Admins can delete catalog images"
 -- IMPORTANTE: crea primero el usuario desde Supabase Dashboard > Authentication > Users.
 -- Luego ejecuta la instrucción de README con el UUID de esa cuenta para autorizarla.
 -- No insertes usuarios desde el catálogo público.
+
+
+-- Compatibilidad con el proyecto existente: la app utiliza products.category
+-- y el bucket catalog-images. Este bloque también puede ejecutarse en una
+-- base de datos que ya tenga category_id y una tabla categories.
+alter table public.products add column if not exists category text;
+create index if not exists products_category_idx on public.products (category);
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('catalog-images', 'catalog-images', true, 8388608, array['image/jpeg','image/png','image/webp','image/gif'])
+on conflict (id) do update set
+  public = excluded.public,
+  file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;
+
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname='storage' and tablename='objects' and policyname='Public can view catalog images') then
+    create policy "Public can view catalog images"
+      on storage.objects for select to anon, authenticated
+      using (bucket_id = 'catalog-images');
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='storage' and tablename='objects' and policyname='Admins can upload catalog images') then
+    create policy "Admins can upload catalog images"
+      on storage.objects for insert to authenticated
+      with check (bucket_id = 'catalog-images'
+        and exists (select 1 from public.admin_users a where a.user_id = auth.uid()));
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='storage' and tablename='objects' and policyname='Admins can update catalog images') then
+    create policy "Admins can update catalog images"
+      on storage.objects for update to authenticated
+      using (bucket_id = 'catalog-images'
+        and exists (select 1 from public.admin_users a where a.user_id = auth.uid()))
+      with check (bucket_id = 'catalog-images'
+        and exists (select 1 from public.admin_users a where a.user_id = auth.uid()));
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='storage' and tablename='objects' and policyname='Admins can delete catalog images') then
+    create policy "Admins can delete catalog images"
+      on storage.objects for delete to authenticated
+      using (bucket_id = 'catalog-images'
+        and exists (select 1 from public.admin_users a where a.user_id = auth.uid()));
+  end if;
+end $$;
